@@ -1,0 +1,24 @@
+flowchart TD
+    A[CB3 iCal Feed\ngoogle calendar] -->|scraper.py| B[cb3_meetings.csv]
+    C[NYC DOB NOW API\nrbx6-tga4] -->|permit_scraper.py| D[permits.csv]
+
+    B --> E[app.py]
+    D --> E
+
+    E --> F[Tab 1: Timeline\nunified view]
+    E --> G[Tab 2: CB3 Meetings\nfiltered list]
+    E --> H[Tab 3: Permits\nfiltered list]
+
+    F --> I[Activity Charts\nannual / monthly / overlap]
+    F --> J[Timeline Items\nmeetings + permits]
+    J --> K[Add to Calendar\n.ics export]
+
+    G --> L[Topic filter\nYear filter\nUpcoming only]
+    H --> M[Permit type filter\nResidential filter\nLLC filter]
+
+    style A fill:#4a7c59,color:#fff
+    style C fill:#9b8ec4,color:#fff
+    style E fill:#333,color:#fff
+    style F fill:#4a7c59,color:#fff
+    style G fill:#4a7c59,color:#fff
+    style H fill:#9b8ec4,color:#fff
