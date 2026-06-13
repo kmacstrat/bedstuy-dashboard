@@ -1,86 +1,116 @@
 import requests
 import pandas as pd
 
+DATASET_ID = "rbx6-tga4"
+BASE_URL = f"https://data.cityofnewyork.us/resource/{DATASET_ID}.json"
+
+BEDSTUY_NTАС = [
+    "Bedford-Stuyvesant (West)",
+    "Bedford-Stuyvesant (East)",
+    "Bedford-Stuyvesant"
+]
+
 BEDSTUY_ZIPS = ["11205", "11206", "11216", "11221", "11233"]
 
 JOB_TYPE_LABELS = {
-    "NB": "New Building",
-    "A1": "Major Alteration",
-    "A2": "Minor Alteration",
-    "DM": "Demolition",
-    "A3": "Minor Alteration (A3)",
+    "New Building": "New Building",
+    "Alteration": "Alteration",
+    "Demolition": "Demolition",
+    "Foundation": "Foundation",
+    "Plumbing": "Plumbing",
+    "Mechanical": "Mechanical",
+    "Sidewalk Shed": "Sidewalk Shed",
+    "Scaffold": "Scaffold",
 }
 
-PERMIT_TYPE_LABELS = {
-    "NB": "New Building",
-    "AL": "Alteration",
-    "EW": "Equipment Work",
-    "FO": "Foundation",
-    "SG": "Sign",
-    "BL": "Boiler",
-    "MH": "Mechanical",
-    "PL": "Plumbing",
-}
-
-def fetch_permits_for_zip(zip_code, limit=1000):
-    url = (
-        f"https://data.cityofnewyork.us/resource/ipu4-2q9a.json"
-        f"?zip_code={zip_code}&$limit={limit}"
-        f"&$order=filing_date DESC"
-    )
-    response = requests.get(url)
-    return response.json()
-
-def fetch_all_permits():
+def fetch_permits(limit=2000):
     all_permits = []
-    
+
+    # fetch by zip code
     for zip_code in BEDSTUY_ZIPS:
-        print(f"Fetching permits for {zip_code}...")
-        permits = fetch_permits_for_zip(zip_code)
-        all_permits.extend(permits)
-        print(f"  Got {len(permits)} permits")
-    
+        print(f"Fetching permits for zip {zip_code}...")
+        url = (
+            f"{BASE_URL}?zip_code={zip_code}"
+            f"&$limit={limit}"
+            f"&$order=issued_date DESC"
+        )
+        response = requests.get(url)
+        data = response.json()
+        all_permits.extend(data)
+        print(f"  Got {len(data)} permits")
+
     df = pd.DataFrame(all_permits)
-    
-    df["filing_date"] = pd.to_datetime(df["filing_date"], errors="coerce")
-    df["job_type_label"] = df["job_type"].map(JOB_TYPE_LABELS).fillna(df["job_type"])
-    df["permit_type_label"] = df["permit_type"].map(PERMIT_TYPE_LABELS).fillna(df["permit_type"])
-    
+    print(f"\nTotal before dedup: {len(df)}")
+
+    # clean dates
+    df["filing_date"] = pd.to_datetime(df["issued_date"], errors="coerce")
+    df = df.dropna(subset=["filing_date"])
+
+    # clean owner
     df["owner"] = df.apply(
-        lambda r: r.get("owner_s_business_name", "")
-        if r.get("owner_s_business_name") not in ["N/A", "", None]
-        else f"{r.get('owner_s_first_name', '')} {r.get('owner_s_last_name', '')}".strip(),
+        lambda r: r.get("owner_business_name", "")
+        if r.get("owner_business_name") not in ["N/A", "", None]
+        else r.get("owner_name", "Unknown"),
         axis=1
     )
 
+    # full address
     df["address"] = (
-        df["house__"].astype(str) + " " + 
-        df["street_name"].astype(str) + 
-        ", Brooklyn NY " + 
+        df["house_no"].astype(str) + " " +
+        df["street_name"].astype(str) +
+        ", Brooklyn NY " +
         df["zip_code"].astype(str)
     )
 
-    df["is_llc"] = df["owner_s_business_name"].str.contains(
-        "LLC|LP|CORP|INC|HDFC|ASSOCIATES", 
-        case=False, 
+    # LLC flag
+    df["is_llc"] = df["owner"].str.contains(
+        "LLC|LP|CORP|INC|HDFC|ASSOCIATES|AUTHORITY",
+        case=False,
         na=False
     )
 
-    df["residential"] = df["residential"].apply(
-        lambda x: "Yes" if str(x).upper() == "YES" else "No"
+    # residential flag -- DOB NOW uses job_description
+    df["residential"] = df["job_description"].str.contains(
+        "residential|dwelling|apartment|housing|hdfc",
+        case=False,
+        na=False
+    ).map({True: "Yes", False: "No"})
+
+    # job type label -- use work_type directly
+    df["job_type"] = df["work_type"].fillna("Unknown")
+    df["job_type_label"] = df["job_type"]
+
+    # permit status
+    df["permit_status"] = df["permit_status"].fillna("Unknown")
+
+    # council district and community board
+    df["gis_council_district"] = df["council_district"]
+    df["community_board"] = df["c_b_no"]
+
+    # coordinates
+    df["gis_latitude"] = df["latitude"]
+    df["gis_longitude"] = df["longitude"]
+
+    # estimated cost -- useful for story
+    df["estimated_cost"] = pd.to_numeric(
+        df["estimated_job_costs"], errors="coerce"
     )
 
+    # neighborhood
+    df["neighborhood"] = df.get("nta", "Bedford-Stuyvesant")
+
+    # keep useful columns
     df = df[[
         "address", "zip_code", "job_type", "job_type_label",
-        "permit_type", "permit_type_label", "permit_status",
-        "filing_date", "owner", "is_llc",
+        "permit_status", "filing_date", "owner", "is_llc",
         "gis_latitude", "gis_longitude", "gis_council_district",
-        "community_board", "residential", "block", "lot"
+        "community_board", "residential", "block", "lot",
+        "job_description", "estimated_cost", "neighborhood"
     ]].drop_duplicates()
 
     df = df.sort_values("filing_date", ascending=False)
     df.to_csv("data/permits.csv", index=False)
-    print(f"\nSaved {len(df)} permits to data/permits.csv")
+    print(f"Saved {len(df)} permits to data/permits.csv")
     return df
 
-fetch_all_permits()
+fetch_permits()
